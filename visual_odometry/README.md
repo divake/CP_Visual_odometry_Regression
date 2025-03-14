@@ -2,12 +2,20 @@
 
 This project implements a complete visual odometry system using the RGB-D Scenes Dataset v2. The system uses deep learning to estimate camera poses from RGB-D image pairs.
 
+## Features
+
+- ResNet backbone for feature extraction from RGB-D images
+- **Separate regression heads for rotation and translation prediction**
+- Quaternion representation for rotations with proper normalization
+- Customizable loss functions with weighted components
+- Complete training and evaluation pipeline
+
 ## Project Structure
 
 ```
 visual_odometry/
 ├── models/
-│   ├── base_model.py     # ResNet-based visual odometry model
+│   ├── base_model.py     # ResNet-based visual odometry model with separate heads
 │   └── loss.py           # Loss functions for training
 ├── utils/
 │   ├── evaluation.py     # Metrics for evaluating performance
@@ -60,14 +68,15 @@ dataset_rgbd_scenes_v2/
 
 ## Model Architecture
 
-The visual odometry model consists of:
+The visual odometry model uses a ResNet backbone with separate regression heads:
 
-- ResNet-18 backbone (pretrained on ImageNet)
-- Modified first convolutional layer to accept 4-channel input (RGB + Depth)
-- Regression head with fully connected layers: 512*2 → 256 → 128 → 7
-- Output: 7-dimensional pose vector [qw, qx, qy, qz, tx, ty, tz]
-  - First 4 values for quaternion rotation
-  - Last 3 values for translation
+1. **Feature Extraction**: A modified ResNet processes RGB-D image pairs
+2. **Shared Processing**: Extracted features go through shared layers
+3. **Separate Heads**:
+   - **Rotation Head**: Specialized layers for quaternion prediction with explicit normalization
+   - **Translation Head**: Dedicated layers for translation vector prediction
+
+This separation allows the model to better handle the different characteristics of rotation and translation components, improving overall accuracy.
 
 ## Usage
 

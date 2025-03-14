@@ -29,6 +29,8 @@ from typing import Dict, List, Tuple, Optional, Union
 import json
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+import torch.distributed as dist
+from torch.nn.parallel import DataParallel, DistributedDataParallel
 
 # Add parent directory to path to import modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -484,7 +486,8 @@ def train(
     config: Dict,
     start_epoch: int = 0,
     best_loss: float = float('inf'),
-    writer: Optional[SummaryWriter] = None
+    writer: Optional[SummaryWriter] = None,
+    use_multi_gpu: bool = True
 ) -> nn.Module:
     """
     Train the model.
@@ -501,6 +504,7 @@ def train(
         start_epoch: Starting epoch (for resuming training)
         best_loss: Best validation loss (for resuming training)
         writer: TensorBoard writer
+        use_multi_gpu: Whether to use multiple GPUs for training
         
     Returns:
         Trained model
@@ -511,6 +515,14 @@ def train(
     
     # Initialize early stopping
     early_stopping = EarlyStopping(patience=config["early_stopping_patience"])
+    
+    # Move model to device
+    model = model.to(device)
+    
+    # Use multiple GPUs if available and requested
+    if use_multi_gpu and torch.cuda.device_count() > 1:
+        logger.info(f"Using {torch.cuda.device_count()} GPUs for training")
+        model = DataParallel(model)
     
     # Training loop
     for epoch in range(start_epoch, config["epochs"]):
@@ -564,8 +576,12 @@ def train(
             pass
         else:
             checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch+1}.pth")
+            
+            # Save model (handle DataParallel wrapper)
+            model_to_save = model.module if isinstance(model, DataParallel) else model
+            
             save_checkpoint(
-                model, optimizer, scheduler, epoch+1, val_metrics['loss'], best_loss,
+                model_to_save, optimizer, scheduler, epoch+1, val_metrics['loss'], best_loss,
                 checkpoint_path, is_best
             )
         
@@ -574,7 +590,11 @@ def train(
             logger.info(f"Early stopping triggered after epoch {epoch+1}")
             break
     
-    return model
+    # Return the base model (not the DataParallel wrapper)
+    if isinstance(model, DataParallel):
+        return model.module
+    else:
+        return model
 
 
 def main(args):
@@ -606,11 +626,10 @@ def main(args):
     
     # Create model
     model = create_model(MODEL_CONFIG)
-    model = model.to(DEVICE)
     
     # Create loss function
     loss_fn = create_loss_function(
-        'pose',
+        TRAIN_CONFIG.get("loss_type", "pose"),
         {
             'rotation_weight': TRAIN_CONFIG["rotation_weight"],
             'translation_weight': TRAIN_CONFIG["translation_weight"]
@@ -636,7 +655,8 @@ def main(args):
     # Train the model
     model = train(
         model, train_loader, val_loader, loss_fn, optimizer, scheduler,
-        DEVICE, TRAIN_CONFIG, start_epoch, best_loss, writer
+        DEVICE, TRAIN_CONFIG, start_epoch, best_loss, writer, 
+        use_multi_gpu=getattr(args, 'use_multi_gpu', True)  # Default to True if not specified
     )
     
     # Close TensorBoard writer

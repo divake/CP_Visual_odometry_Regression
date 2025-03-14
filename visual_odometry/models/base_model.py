@@ -22,17 +22,17 @@ logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class ImprovedVOModel(nn.Module):
-    """Improved Visual Odometry model with separate heads for rotation and translation."""
+class VOModelWithSeparateHeads(nn.Module):
+    """Visual Odometry model with separate heads for rotation and translation."""
     
     def __init__(self, config: Dict):
         """
-        Initialize the improved visual odometry model.
+        Initialize the visual odometry model with separate heads.
         
         Args:
             config: Model configuration dictionary
         """
-        super(ImprovedVOModel, self).__init__()
+        super(VOModelWithSeparateHeads, self).__init__()
         
         self.config = config
         
@@ -40,16 +40,38 @@ class ImprovedVOModel(nn.Module):
         self._init_backbone()
         
         # Initialize shared layers
-        self.fc_shared = nn.Linear(self.feature_dim * 2, 256)
+        shared_dim = 256
+        self.shared_layers = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(self.feature_dim * 2, shared_dim),
+            nn.ReLU(),
+            nn.Dropout(self.config['dropout_rate'])
+        )
         
-        # Initialize separate heads for rotation and translation
-        self._init_rotation_head()
-        self._init_translation_head()
+        # Initialize rotation head (for quaternion)
+        self.rotation_head = nn.Sequential(
+            nn.Linear(shared_dim, 128),
+            nn.ReLU(),
+            nn.Dropout(self.config['dropout_rate']),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 4)  # output: [qw, qx, qy, qz]
+        )
+        
+        # Initialize translation head
+        self.translation_head = nn.Sequential(
+            nn.Linear(shared_dim, 128),
+            nn.ReLU(),
+            nn.Dropout(self.config['dropout_rate']),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 3)  # output: [tx, ty, tz]
+        )
         
         # Initialize weights
         self._init_weights()
         
-        logger.info(f"Initialized improved {config['backbone']} model with {config['input_channels']} input channels")
+        logger.info(f"Initialized {config['backbone']} model with separate heads")
     
     def _init_backbone(self):
         """Initialize the ResNet backbone with modified input layer."""
@@ -97,33 +119,11 @@ class ImprovedVOModel(nn.Module):
         # Remove the final fully connected layer
         self.backbone = nn.Sequential(*list(self.backbone.children())[:-1])
     
-    def _init_rotation_head(self):
-        """Initialize the rotation head for quaternion prediction."""
-        dropout_rate = self.config['dropout_rate']
-        
-        self.rotation_head = nn.Sequential(
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(128, 4)  # Output quaternion [qw, qx, qy, qz]
-        )
-    
-    def _init_translation_head(self):
-        """Initialize the translation head for position prediction."""
-        dropout_rate = self.config['dropout_rate']
-        
-        self.translation_head = nn.Sequential(
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(128, 3)  # Output translation [tx, ty, tz]
-        )
-    
     def _init_weights(self):
         """Initialize weights for the new layers."""
         init_method = self.config['init_method']
         
-        for module in [self.fc_shared, self.rotation_head, self.translation_head]:
+        for module in [self.shared_layers, self.rotation_head, self.translation_head]:
             for m in module.modules():
                 if isinstance(m, nn.Linear):
                     if init_method == 'xavier':
@@ -175,18 +175,19 @@ class ImprovedVOModel(nn.Module):
         # Concatenate features from both frames
         combined_features = torch.cat([features1, features2], dim=1)  # (B, feature_dim*2)
         
-        # Shared layers
-        shared_features = F.relu(self.fc_shared(combined_features))
+        # Process through shared layers
+        shared_features = self.shared_layers(combined_features)
         
-        # Rotation head
+        # Process through rotation head
         rotation = self.rotation_head(shared_features)
-        # Normalize quaternion
+        
+        # Explicitly normalize quaternion to ensure unit length
         rotation = F.normalize(rotation, p=2, dim=1)
         
-        # Translation head
+        # Process through translation head
         translation = self.translation_head(shared_features)
         
-        # Concatenate rotation and translation
+        # Concatenate rotation and translation to form the complete pose
         pose = torch.cat([rotation, translation], dim=1)
         
         return pose
@@ -202,9 +203,8 @@ def create_model(config: Dict) -> nn.Module:
     Returns:
         Initialized VOModel
     """
-    # Use the improved model
-    model = ImprovedVOModel(config)
-    return model
+    # Use the model with separate heads
+    return VOModelWithSeparateHeads(config)
 
 
 if __name__ == "__main__":

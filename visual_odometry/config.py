@@ -35,29 +35,30 @@ MODEL_CONFIG = {
     "input_channels": 4,     # RGB + Depth
     "fc_layers": [512*2, 256, 128, 7],  # Fully connected layers dimensions
     "dropout_rate": 0.3,     # Increased dropout rate for better regularization
-    "init_method": "kaiming"  # Weight initialization method: xavier, kaiming
+    "init_method": "kaiming",  # Weight initialization method: xavier, kaiming
+    "use_separate_heads": True  # Use separate heads for rotation and translation
 }
 
 # Training configuration
 TRAIN_CONFIG = {
-    "batch_size": 16,
-    "num_workers": 4,
+    "batch_size": 32,  # Increased batch size for multi-GPU training
+    "num_workers": 8,  # Increased number of workers
     "learning_rate": 1e-4,
-    "weight_decay": 1e-4,    # Increased weight decay for better regularization
+    "weight_decay": 1e-4,
     "epochs": 100,
-    "early_stopping_patience": 15,  # Increased patience
+    "early_stopping_patience": 15,
     "rotation_weight": 10.0,  # Weight for rotation loss component
     "translation_weight": 1.0,  # Weight for translation loss component
-    "loss_type": "improved_pose",  # Use our improved pose loss
+    "loss_type": "separate_heads",  # Use the loss function for separate heads
     "scheduler": {
-        "type": "plateau",  # Options: plateau, step, cosine
+        "type": "plateau",
         "patience": 5,
         "factor": 0.5,
         "min_lr": 1e-6
     },
     "checkpoint_dir": "checkpoints",
-    "log_interval": 10,  # Log training metrics every N batches
-    "save_best_only": True  # Only save the best model based on validation loss
+    "log_interval": 10,
+    "save_best_only": True
 }
 
 # Dataset configuration

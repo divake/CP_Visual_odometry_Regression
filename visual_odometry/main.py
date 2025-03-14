@@ -43,6 +43,7 @@ def parse_args():
     # Train command
     train_parser = subparsers.add_parser("train", help="Train the model")
     train_parser.add_argument("--resume", type=str, help="Path to checkpoint to resume from")
+    train_parser.add_argument("--single-gpu", action="store_true", help="Use only a single GPU even if multiple are available")
     
     # Test command
     test_parser = subparsers.add_parser("test", help="Test the model")
@@ -66,6 +67,8 @@ def main():
     # Run the appropriate command
     if args.command == "train":
         logger.info("Starting training...")
+        # Pass the negation of single-gpu flag to use multi-GPU by default
+        args.use_multi_gpu = not args.single_gpu
         train_main(args)
     elif args.command == "test":
         logger.info("Starting testing...")

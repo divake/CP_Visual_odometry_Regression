@@ -185,12 +185,121 @@ class PoseLoss(nn.Module):
         return total_loss, loss_components
 
 
+class ImprovedPoseLoss(nn.Module):
+    """
+    Improved pose loss that handles quaternions correctly.
+    
+    This loss computes:
+    - Quaternion geodesic distance for rotation component
+    - L2 loss for translation component
+    """
+    
+    def __init__(self, rotation_weight: float = 10.0, translation_weight: float = 1.0):
+        """
+        Initialize the improved pose loss.
+        
+        Args:
+            rotation_weight: Weight for rotation component
+            translation_weight: Weight for translation component
+        """
+        super(ImprovedPoseLoss, self).__init__()
+        self.rotation_weight = rotation_weight
+        self.translation_weight = translation_weight
+    
+    def quaternion_geodesic_distance(self, q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
+        """
+        Compute geodesic distance between two quaternions.
+        
+        The geodesic distance is defined as 2*arccos(|q1·q2|), which gives the
+        angle between the two orientations in radians.
+        
+        Args:
+            q1: First quaternion of shape (B, 4)
+            q2: Second quaternion of shape (B, 4)
+            
+        Returns:
+            Geodesic distance of shape (B,)
+        """
+        # Normalize quaternions
+        q1_norm = F.normalize(q1, p=2, dim=1)
+        q2_norm = F.normalize(q2, p=2, dim=1)
+        
+        # Compute dot product
+        dot_product = torch.sum(q1_norm * q2_norm, dim=1)
+        
+        # Handle double cover: d(q1, q2) = min(|q1 - q2|, |q1 + q2|)
+        # This is equivalent to using the absolute value of the dot product
+        dot_product = torch.abs(dot_product)
+        
+        # Clamp dot product to [-1, 1] to avoid numerical issues
+        dot_product = torch.clamp(dot_product, -1.0, 1.0)
+        
+        # Compute geodesic distance (angle in radians)
+        distance = 2.0 * torch.acos(dot_product)
+        
+        return distance
+    
+    def translation_distance(self, t1: torch.Tensor, t2: torch.Tensor) -> torch.Tensor:
+        """
+        Compute L2 distance between two translation vectors.
+        
+        Args:
+            t1: First translation vector of shape (B, 3)
+            t2: Second translation vector of shape (B, 3)
+            
+        Returns:
+            L2 distance of shape (B,)
+        """
+        return torch.norm(t1 - t2, p=2, dim=1)
+    
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """
+        Compute pose loss between predicted and target pose vectors.
+        
+        Args:
+            pred: Predicted pose tensor of shape (B, 7)
+            target: Target pose tensor of shape (B, 7)
+            
+        Returns:
+            Tuple containing:
+            - Total loss
+            - Dictionary with individual loss components
+        """
+        # Extract rotation and translation components
+        pred_rotation = pred[:, :4]
+        pred_translation = pred[:, 4:]
+        
+        target_rotation = target[:, :4]
+        target_translation = target[:, 4:]
+        
+        # Compute rotation and translation losses
+        rotation_loss = self.quaternion_geodesic_distance(pred_rotation, target_rotation)
+        translation_loss = self.translation_distance(pred_translation, target_translation)
+        
+        # Compute weighted total loss
+        weighted_rotation_loss = self.rotation_weight * rotation_loss
+        weighted_translation_loss = self.translation_weight * translation_loss
+        
+        total_loss = weighted_rotation_loss.mean() + weighted_translation_loss.mean()
+        
+        # Return total loss and individual components
+        loss_components = {
+            'rotation_loss': rotation_loss.mean(),
+            'translation_loss': translation_loss.mean(),
+            'weighted_rotation_loss': weighted_rotation_loss.mean(),
+            'weighted_translation_loss': weighted_translation_loss.mean(),
+            'total_loss': total_loss
+        }
+        
+        return total_loss, loss_components
+
+
 def create_loss_function(loss_type: str, config: Dict = None) -> nn.Module:
     """
     Create a loss function based on the specified type.
     
     Args:
-        loss_type: Type of loss function ('mse', 'weighted_mse', 'pose')
+        loss_type: Type of loss function ('mse', 'weighted_mse', 'pose', 'improved_pose')
         config: Configuration dictionary with loss parameters
         
     Returns:
@@ -208,6 +317,8 @@ def create_loss_function(loss_type: str, config: Dict = None) -> nn.Module:
         return WeightedMSELoss(rotation_weight, translation_weight)
     elif loss_type == 'pose':
         return PoseLoss(rotation_weight, translation_weight)
+    elif loss_type == 'improved_pose':
+        return ImprovedPoseLoss(rotation_weight, translation_weight)
     else:
         raise ValueError(f"Unsupported loss type: {loss_type}")
 

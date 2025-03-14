@@ -24,6 +24,7 @@ import json
 from typing import Dict, List, Tuple, Optional, Union
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+from scipy.spatial.transform import Rotation
 
 # Add parent directory to path to import modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -173,42 +174,42 @@ def reconstruct_trajectory(
     trajectory = np.zeros((n_poses + 1, 7))
     trajectory[0] = initial_pose
     
+    # Initialize transformation matrix for the first pose
+    T_abs = np.eye(4)
+    if initial_pose is not None:
+        # Convert quaternion to rotation matrix
+        qw, qx, qy, qz = initial_pose[:4]
+        r = Rotation.from_quat([qx, qy, qz, qw])  # scipy uses [x,y,z,w]
+        T_abs[:3, :3] = r.as_matrix()
+        T_abs[:3, 3] = initial_pose[4:]
+    
     # Reconstruct trajectory
     for i in range(n_poses):
         # Get relative pose
         rel_pose = relative_poses[i]
         
-        # Get previous absolute pose
-        prev_pose = trajectory[i]
+        # Extract quaternion and translation
+        qw, qx, qy, qz = rel_pose[:4]
+        tx, ty, tz = rel_pose[4:]
         
-        # Extract quaternions and translations
-        prev_q = prev_pose[:4]
-        prev_t = prev_pose[4:]
+        # Create transformation matrix for relative pose
+        T_rel = np.eye(4)
+        r_rel = Rotation.from_quat([qx, qy, qz, qw])  # scipy uses [x,y,z,w]
+        T_rel[:3, :3] = r_rel.as_matrix()
+        T_rel[:3, 3] = [tx, ty, tz]
         
-        rel_q = rel_pose[:4]
-        rel_t = rel_pose[4:]
+        # Update absolute pose: T_abs_new = T_abs * T_rel
+        T_abs = T_abs @ T_rel
         
-        # Compute new quaternion: q_new = q_rel * q_prev
-        # This is a simplified implementation and might need refinement
-        q_w = rel_q[0] * prev_q[0] - rel_q[1] * prev_q[1] - rel_q[2] * prev_q[2] - rel_q[3] * prev_q[3]
-        q_x = rel_q[0] * prev_q[1] + rel_q[1] * prev_q[0] + rel_q[2] * prev_q[3] - rel_q[3] * prev_q[2]
-        q_y = rel_q[0] * prev_q[2] - rel_q[1] * prev_q[3] + rel_q[2] * prev_q[0] + rel_q[3] * prev_q[1]
-        q_z = rel_q[0] * prev_q[3] + rel_q[1] * prev_q[2] - rel_q[2] * prev_q[1] + rel_q[3] * prev_q[0]
+        # Extract new pose
+        r_abs = Rotation.from_matrix(T_abs[:3, :3])
+        quat_abs = r_abs.as_quat()  # [x,y,z,w]
+        quat_abs = np.array([quat_abs[3], quat_abs[0], quat_abs[1], quat_abs[2]])  # [w,x,y,z]
+        trans_abs = T_abs[:3, 3]
         
-        new_q = np.array([q_w, q_x, q_y, q_z])
-        
-        # Normalize quaternion
-        new_q = new_q / np.linalg.norm(new_q)
-        
-        # Compute new translation: t_new = t_prev + R(q_prev) * t_rel
-        # This is a simplified implementation and might need refinement
-        # For a more accurate implementation, convert quaternion to rotation matrix
-        # and apply the rotation to the translation
-        new_t = prev_t + rel_t  # Simplified
-        
-        # Set new pose
-        trajectory[i+1, :4] = new_q
-        trajectory[i+1, 4:] = new_t
+        # Store new pose
+        trajectory[i+1, :4] = quat_abs
+        trajectory[i+1, 4:] = trans_abs
     
     return trajectory
 

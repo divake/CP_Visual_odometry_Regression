@@ -22,36 +22,34 @@ logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class VOModel(nn.Module):
-    """Visual Odometry model with ResNet backbone and regression head."""
+class ImprovedVOModel(nn.Module):
+    """Improved Visual Odometry model with separate heads for rotation and translation."""
     
     def __init__(self, config: Dict):
         """
-        Initialize the visual odometry model.
+        Initialize the improved visual odometry model.
         
         Args:
-            config: Model configuration dictionary containing:
-                - backbone: ResNet variant (resnet18, resnet34, resnet50)
-                - pretrained: Whether to use pretrained weights
-                - input_channels: Number of input channels (4 for RGB-D)
-                - fc_layers: Dimensions of fully connected layers
-                - dropout_rate: Dropout rate for FC layers
-                - init_method: Weight initialization method
+            config: Model configuration dictionary
         """
-        super(VOModel, self).__init__()
+        super(ImprovedVOModel, self).__init__()
         
         self.config = config
         
         # Initialize ResNet backbone
         self._init_backbone()
         
-        # Initialize regression head
-        self._init_regression_head()
+        # Initialize shared layers
+        self.fc_shared = nn.Linear(self.feature_dim * 2, 256)
+        
+        # Initialize separate heads for rotation and translation
+        self._init_rotation_head()
+        self._init_translation_head()
         
         # Initialize weights
         self._init_weights()
         
-        logger.info(f"Initialized {config['backbone']} model with {config['input_channels']} input channels")
+        logger.info(f"Initialized improved {config['backbone']} model with {config['input_channels']} input channels")
     
     def _init_backbone(self):
         """Initialize the ResNet backbone with modified input layer."""
@@ -87,11 +85,7 @@ class VOModel(nn.Module):
                 with torch.no_grad():
                     new_conv.weight[:, :3, :, :] = original_conv.weight.clone()
                     
-                    # Initialize the depth channel weights
-                    # Option 1: Initialize with zeros
-                    # new_conv.weight[:, 3:, :, :] = 0
-                    
-                    # Option 2: Initialize with mean of RGB channels
+                    # Initialize the depth channel with mean of RGB channels
                     new_conv.weight[:, 3:, :, :] = original_conv.weight[:, :3, :, :].mean(dim=1, keepdim=True)
                     
                     if original_conv.bias is not None:
@@ -103,47 +97,44 @@ class VOModel(nn.Module):
         # Remove the final fully connected layer
         self.backbone = nn.Sequential(*list(self.backbone.children())[:-1])
     
-    def _init_regression_head(self):
-        """Initialize the regression head for pose estimation."""
-        fc_dims = self.config['fc_layers']
+    def _init_rotation_head(self):
+        """Initialize the rotation head for quaternion prediction."""
         dropout_rate = self.config['dropout_rate']
         
-        # First layer takes features from both frames
-        layers = [
-            nn.Flatten(),
-            nn.Linear(self.feature_dim * 2, fc_dims[1]),
+        self.rotation_head = nn.Sequential(
+            nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Dropout(dropout_rate)
-        ]
+            nn.Dropout(dropout_rate),
+            nn.Linear(128, 4)  # Output quaternion [qw, qx, qy, qz]
+        )
+    
+    def _init_translation_head(self):
+        """Initialize the translation head for position prediction."""
+        dropout_rate = self.config['dropout_rate']
         
-        # Add remaining layers
-        for i in range(1, len(fc_dims) - 2):
-            layers.extend([
-                nn.Linear(fc_dims[i], fc_dims[i+1]),
-                nn.ReLU(),
-                nn.Dropout(dropout_rate)
-            ])
-        
-        # Final layer outputs 7-dimensional pose vector
-        layers.append(nn.Linear(fc_dims[-2], fc_dims[-1]))
-        
-        self.regression_head = nn.Sequential(*layers)
+        self.translation_head = nn.Sequential(
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(128, 3)  # Output translation [tx, ty, tz]
+        )
     
     def _init_weights(self):
         """Initialize weights for the new layers."""
         init_method = self.config['init_method']
         
-        for m in self.regression_head.modules():
-            if isinstance(m, nn.Linear):
-                if init_method == 'xavier':
-                    nn.init.xavier_uniform_(m.weight)
-                elif init_method == 'kaiming':
-                    nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
-                else:
-                    raise ValueError(f"Unsupported initialization method: {init_method}")
-                
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
+        for module in [self.fc_shared, self.rotation_head, self.translation_head]:
+            for m in module.modules():
+                if isinstance(m, nn.Linear):
+                    if init_method == 'xavier':
+                        nn.init.xavier_uniform_(m.weight)
+                    elif init_method == 'kaiming':
+                        nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
+                    else:
+                        raise ValueError(f"Unsupported initialization method: {init_method}")
+                    
+                    if m.bias is not None:
+                        nn.init.zeros_(m.bias)
     
     def _extract_features(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -184,20 +175,24 @@ class VOModel(nn.Module):
         # Concatenate features from both frames
         combined_features = torch.cat([features1, features2], dim=1)  # (B, feature_dim*2)
         
-        # Pass through regression head
-        pose = self.regression_head(combined_features)  # (B, 7)
+        # Shared layers
+        shared_features = F.relu(self.fc_shared(combined_features))
         
-        # Normalize the quaternion part
-        q = pose[:, :4]
-        q_norm = F.normalize(q, p=2, dim=1)
+        # Rotation head
+        rotation = self.rotation_head(shared_features)
+        # Normalize quaternion
+        rotation = F.normalize(rotation, p=2, dim=1)
         
-        # Replace the quaternion part with normalized version
-        pose = torch.cat([q_norm, pose[:, 4:]], dim=1)
+        # Translation head
+        translation = self.translation_head(shared_features)
+        
+        # Concatenate rotation and translation
+        pose = torch.cat([rotation, translation], dim=1)
         
         return pose
 
 
-def create_model(config: Dict) -> VOModel:
+def create_model(config: Dict) -> nn.Module:
     """
     Create a visual odometry model with the given configuration.
     
@@ -207,7 +202,8 @@ def create_model(config: Dict) -> VOModel:
     Returns:
         Initialized VOModel
     """
-    model = VOModel(config)
+    # Use the improved model
+    model = ImprovedVOModel(config)
     return model
 
 

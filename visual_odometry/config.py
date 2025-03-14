@@ -34,7 +34,7 @@ MODEL_CONFIG = {
     "pretrained": True,      # Use ImageNet pretrained weights
     "input_channels": 4,     # RGB + Depth
     "fc_layers": [512*2, 256, 128, 7],  # Fully connected layers dimensions
-    "dropout_rate": 0.2,     # Dropout rate for FC layers
+    "dropout_rate": 0.3,     # Increased dropout rate for better regularization
     "init_method": "kaiming"  # Weight initialization method: xavier, kaiming
 }
 
@@ -43,11 +43,12 @@ TRAIN_CONFIG = {
     "batch_size": 16,
     "num_workers": 4,
     "learning_rate": 1e-4,
-    "weight_decay": 1e-5,
+    "weight_decay": 1e-4,    # Increased weight decay for better regularization
     "epochs": 100,
-    "early_stopping_patience": 10,
+    "early_stopping_patience": 15,  # Increased patience
     "rotation_weight": 10.0,  # Weight for rotation loss component
     "translation_weight": 1.0,  # Weight for translation loss component
+    "loss_type": "improved_pose",  # Use our improved pose loss
     "scheduler": {
         "type": "plateau",  # Options: plateau, step, cosine
         "patience": 5,

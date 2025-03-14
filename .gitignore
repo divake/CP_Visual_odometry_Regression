@@ -78,3 +78,5 @@ visual_odometry/datasets/
 
 .cursor/
 dataset_rgbd_scenes_v2/
+test_results/
+.gitignore

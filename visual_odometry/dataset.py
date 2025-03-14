@@ -328,9 +328,12 @@ def load_depth_image(path: str, target_size: Optional[Tuple[int, int]] = None,
     
     depth_array = np.array(depth).astype(np.float32)
     
-    # Convert to meters (this conversion might need adjustment based on the dataset)
-    # For RGB-D Scenes v2, depth values are typically in millimeters
+    # Convert to meters (based on our dataset analysis)
+    # For RGB-D Scenes v2, depth values need to be divided by 1000
     depth_array = depth_array / 1000.0
+    
+    # Create a mask for invalid depth values (0)
+    valid_mask = (depth_array > 0).astype(np.float32)
     
     # Clip to maximum depth
     depth_array = np.clip(depth_array, 0, max_depth)

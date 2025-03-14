@@ -155,4 +155,35 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 - RGB-D Scenes Dataset v2 for providing the data
 - PyTorch team for the deep learning framework
-- ResNet authors for the backbone architecture 
+- ResNet authors for the backbone architecture
+
+## Dataset Insights and Considerations
+
+Based on our analysis, here are important considerations for working with this dataset:
+
+1. **Depth Scaling**: 
+   - The depth values in the dataset require proper scaling to convert to metric units (meters)
+   - Our analysis shows that the relationship between raw depth values and camera positions is not straightforward
+   - Based on common practices for RGB-D sensors (like Kinect), a scaling factor of 1/1000 is recommended:
+     ```python
+     depth_meters = depth_raw / 1000.0
+     ```
+   - This would convert the typical depth value of ~10304 to ~10.3 meters, which is reasonable for indoor scenes
+   - The maximum depth value of 29842 would convert to ~29.8 meters
+
+2. **Small Motion**: The relative motion between consecutive frames is small (mean translation ~6.1mm, mean rotation ~0.43 degrees), which means:
+   - The model needs to be sensitive to small changes
+   - Data augmentation should preserve these small motions
+   - Loss function should be carefully designed to handle small values
+
+3. **Quaternion Representation**: The ground truth poses use quaternions for rotation. Our model should:
+   - Ensure quaternion normalization
+   - Consider using a specialized loss function for quaternions
+   - Possibly use a separate head for rotation and translation prediction
+
+4. **Valid Depth Regions**: Only ~75% of depth pixels have valid values. The model should:
+   - Handle missing depth values appropriately
+   - Consider using a mask for valid depth regions
+   - Possibly use confidence weighting based on depth validity
+
+5. **Trajectory Characteristics**: The camera moves primarily in the horizontal plane (X-Z), with less variation in the vertical direction (Y). This pattern should be reflected in the model's predictions. 

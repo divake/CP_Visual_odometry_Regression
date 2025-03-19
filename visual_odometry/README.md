@@ -19,16 +19,20 @@ The dataset consists of:
 
 ```
 visual_odometry/
-├── dataloader.py       # Dataset handling, preprocessing, and creating image pairs
-├── model.py            # Neural network architecture
-├── loss.py             # Custom loss functions (especially for rotations)
-├── train.py            # Main training loop and validation
-├── test.py             # Evaluation on test set
-├── visualization.py    # For plotting trajectories and errors
-├── utils.py            # Helper functions like quaternion conversions
-├── config.py           # Hyperparameters and configuration settings
-└── Results/            # For saving model checkpoints, logs, and visualizations
+├── src/
+│   ├── dataloader.py       # Dataset handling, preprocessing, and creating image pairs
+│   ├── model.py            # Neural network architecture
+│   ├── loss.py             # Custom loss functions (especially for rotations)
+│   ├── train.py            # Main training loop and validation
+│   ├── test.py             # Evaluation on test set
+│   ├── visualization.py    # For plotting trajectories and errors
+│   ├── utils.py            # Helper functions like quaternion conversions
+│   └── config.py           # Hyperparameters and configuration settings
+└── Results/                # For saving model checkpoints, logs, and visualizations
+|__ Other/                  # Other codes to check the datasets and structure. Mainly this is test codes to understand anything to before writing the main codes
 ```
+
+
 
 ## Workflow
 

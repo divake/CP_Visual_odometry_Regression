@@ -569,7 +569,7 @@ def save_metrics(metrics, output_path):
         json.dump(metrics, f, indent=4)
 
 
-def plot_trajectory_2d(gt_trajectory, pred_trajectory, pred_aligned=None, save_path=None):
+def plot_trajectory_2d(gt_trajectory, pred_trajectory, pred_aligned=None, pred_opt_aligned=None, save_path=None):
     """
     Plot 2D (top-down view) trajectory comparison.
     
@@ -577,6 +577,7 @@ def plot_trajectory_2d(gt_trajectory, pred_trajectory, pred_aligned=None, save_p
         gt_trajectory (numpy.ndarray): Ground truth trajectory, shape (N, 3)
         pred_trajectory (numpy.ndarray): Predicted trajectory, shape (N, 3)
         pred_aligned (numpy.ndarray, optional): Scale-aligned predicted trajectory, shape (N, 3)
+        pred_opt_aligned (numpy.ndarray, optional): Optimized and aligned trajectory, shape (N, 3)
         save_path (str, optional): Path to save the plot
     """
     # Convert to numpy if needed
@@ -598,6 +599,12 @@ def plot_trajectory_2d(gt_trajectory, pred_trajectory, pred_aligned=None, save_p
         if isinstance(pred_aligned, torch.Tensor):
             pred_aligned = pred_aligned.cpu().numpy()
         ax.plot(pred_aligned[:, 0], pred_aligned[:, 2], 'b-', linewidth=1, label='Prediction (Scale-Aligned)')
+    
+    # Plot optimized and aligned trajectory if provided
+    if pred_opt_aligned is not None:
+        if isinstance(pred_opt_aligned, torch.Tensor):
+            pred_opt_aligned = pred_opt_aligned.cpu().numpy()
+        ax.plot(pred_opt_aligned[:, 0], pred_opt_aligned[:, 2], 'c-', linewidth=1.5, label='Prediction (Optimized)')
     
     # Mark start and end points
     ax.plot(gt_trajectory[0, 0], gt_trajectory[0, 2], 'go', markersize=8, label='Start')

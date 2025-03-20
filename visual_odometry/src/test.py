@@ -29,7 +29,8 @@ from utils import (
     plot_trajectory_3d,
     plot_error_analysis,
     calculate_scale_error,
-    align_trajectories
+    align_trajectories,
+    optimize_trajectory
 )
 
 
@@ -182,44 +183,76 @@ def evaluate_model(model, test_loader, device):
     
     # Compute full trajectory
     gt_trajectory = compute_trajectory(gt_relative_poses)
-    pred_trajectory = compute_trajectory(relative_poses)
+    pred_trajectory_raw = compute_trajectory(relative_poses)
     
-    # Calculate metrics
-    # Calculate metrics with three different alignment approaches
+    # Apply trajectory optimization to reduce drift
+    pred_trajectory_optimized = optimize_trajectory(
+        pred_trajectory_raw, 
+        relative_poses, 
+        window_size=30,  # Larger window size for better optimization
+        iterations=5     # More iterations for better convergence
+    )
+    
+    # Calculate metrics for raw trajectory
     translations_rmse = np.sqrt(np.mean(np.sum((relative_poses[:, 4:7] - gt_relative_poses[:, 4:7]) ** 2, axis=1)))
+    ate_no_align = calculate_ate(pred_trajectory_raw, gt_trajectory, align_scale=False)
+    ate_scale_align = calculate_ate(pred_trajectory_raw, gt_trajectory, align_scale=True)
     
-    # Regular ATE without alignment
-    ate_no_align = calculate_ate(pred_trajectory, gt_trajectory, align_scale=False)
+    # Calculate metrics for optimized trajectory
+    ate_optimized_no_align = calculate_ate(pred_trajectory_optimized, gt_trajectory, align_scale=False)
+    ate_optimized_scale_align = calculate_ate(pred_trajectory_optimized, gt_trajectory, align_scale=True)
     
-    # ATE with scale alignment
-    ate_scale_align = calculate_ate(pred_trajectory, gt_trajectory, align_scale=True)
+    # Calculate scale error for both trajectories
+    mean_scale_ratio, scale_consistency = calculate_scale_error(pred_trajectory_raw, gt_trajectory)
+    mean_scale_ratio_opt, scale_consistency_opt = calculate_scale_error(pred_trajectory_optimized, gt_trajectory)
     
-    # Calculate scale error
-    mean_scale_ratio, scale_consistency = calculate_scale_error(pred_trajectory, gt_trajectory)
+    # Compute aligned trajectories for visualization
+    pred_trajectory_aligned = align_trajectories(pred_trajectory_raw, gt_trajectory, align_type='scale')
+    pred_trajectory_opt_aligned = align_trajectories(pred_trajectory_optimized, gt_trajectory, align_type='scale')
     
-    # Compute aligned trajectory for visualization
-    pred_trajectory_aligned = align_trajectories(pred_trajectory, gt_trajectory, align_type='scale')
-    
-    # Calculate per-axis errors in the aligned trajectory
+    # Calculate per-axis errors in the aligned trajectories
     axis_errors = np.abs(pred_trajectory_aligned - gt_trajectory)
     axis_rmse = np.sqrt(np.mean(axis_errors ** 2, axis=0))
+    
+    axis_errors_opt = np.abs(pred_trajectory_opt_aligned - gt_trajectory)
+    axis_rmse_opt = np.sqrt(np.mean(axis_errors_opt ** 2, axis=0))
+    
+    # Calculate drift per meter traveled
+    gt_distance = np.sum(np.linalg.norm(np.diff(gt_trajectory, axis=0), axis=1))
+    if gt_distance > 0:
+        drift_per_meter = ate_scale_align / gt_distance
+        drift_per_meter_opt = ate_optimized_scale_align / gt_distance
+    else:
+        drift_per_meter = 0
+        drift_per_meter_opt = 0
     
     metrics = {
         "translation_error_rmse": float(translations_rmse),
         "ate_no_alignment": float(ate_no_align),
         "ate_scale_aligned": float(ate_scale_align),
+        "ate_optimized_no_align": float(ate_optimized_no_align),
+        "ate_optimized_scale_align": float(ate_optimized_scale_align),
         "mean_scale_ratio": float(mean_scale_ratio),
         "scale_consistency": float(scale_consistency),
+        "mean_scale_ratio_optimized": float(mean_scale_ratio_opt),
+        "scale_consistency_optimized": float(scale_consistency_opt),
         "x_error_rmse": float(axis_rmse[0]),
         "y_error_rmse": float(axis_rmse[1]),
         "z_error_rmse": float(axis_rmse[2]),
+        "x_error_rmse_optimized": float(axis_rmse_opt[0]),
+        "y_error_rmse_optimized": float(axis_rmse_opt[1]),
+        "z_error_rmse_optimized": float(axis_rmse_opt[2]),
+        "drift_per_meter": float(drift_per_meter),
+        "drift_per_meter_optimized": float(drift_per_meter_opt)
     }
     
     # Save trajectories for visualization
     trajectories = {
         "gt_trajectory": gt_trajectory,
-        "pred_trajectory": pred_trajectory,
-        "pred_trajectory_aligned": pred_trajectory_aligned
+        "pred_trajectory": pred_trajectory_raw,
+        "pred_trajectory_aligned": pred_trajectory_aligned,
+        "pred_trajectory_optimized": pred_trajectory_optimized,
+        "pred_trajectory_opt_aligned": pred_trajectory_opt_aligned
     }
     
     return metrics, trajectories
@@ -255,8 +288,14 @@ def main():
     print(f"Translation Error (RMSE): {metrics['translation_error_rmse']:.4f} m")
     print(f"ATE without alignment: {metrics['ate_no_alignment']:.4f} m")
     print(f"ATE with scale alignment: {metrics['ate_scale_aligned']:.4f} m")
+    print(f"ATE optimized without alignment: {metrics['ate_optimized_no_align']:.4f} m")
+    print(f"ATE optimized with scale alignment: {metrics['ate_optimized_scale_align']:.4f} m")
     print(f"Mean Scale Ratio: {metrics['mean_scale_ratio']:.4f} (1.0 is ideal)")
+    print(f"Mean Scale Ratio (optimized): {metrics['mean_scale_ratio_optimized']:.4f}")
     print(f"Scale Consistency (std): {metrics['scale_consistency']:.4f} (lower is better)")
+    print(f"Scale Consistency (optimized): {metrics['scale_consistency_optimized']:.4f}")
+    print(f"Drift per meter traveled: {metrics['drift_per_meter']:.4f} m/m")
+    print(f"Drift per meter traveled (optimized): {metrics['drift_per_meter_optimized']:.4f} m/m")
     print(f"X-axis Error (RMSE): {metrics['x_error_rmse']:.4f} m")
     print(f"Y-axis Error (RMSE): {metrics['y_error_rmse']:.4f} m")
     print(f"Z-axis Error (RMSE): {metrics['z_error_rmse']:.4f} m")
@@ -269,6 +308,8 @@ def main():
     save_trajectory(trajectories["gt_trajectory"], "gt_trajectory.csv")
     save_trajectory(trajectories["pred_trajectory"], "pred_trajectory.csv")
     save_trajectory(trajectories["pred_trajectory_aligned"], "pred_trajectory_aligned.csv")
+    save_trajectory(trajectories["pred_trajectory_optimized"], "pred_trajectory_optimized.csv")
+    save_trajectory(trajectories["pred_trajectory_opt_aligned"], "pred_trajectory_opt_aligned.csv")
     
     # Generate visualizations
     print("\nGenerating visualizations...")
@@ -277,20 +318,21 @@ def main():
         trajectories["gt_trajectory"], 
         trajectories["pred_trajectory"],
         trajectories["pred_trajectory_aligned"],
+        trajectories["pred_trajectory_opt_aligned"],
         save_path=os.path.join(config.RESULTS_DIR, "visualizations", "trajectory_2d.png")
     )
     
     # 3D plot
     plot_trajectory_3d(
         trajectories["gt_trajectory"], 
-        trajectories["pred_trajectory_aligned"],
+        trajectories["pred_trajectory_opt_aligned"],
         save_path=os.path.join(config.RESULTS_DIR, "visualizations", "trajectory_3d.png")
     )
     
     # Error analysis plot
     plot_error_analysis(
         trajectories["gt_trajectory"],
-        trajectories["pred_trajectory_aligned"],
+        trajectories["pred_trajectory_opt_aligned"],
         save_path=os.path.join(config.RESULTS_DIR, "visualizations", "translation_errors.png")
     )
     

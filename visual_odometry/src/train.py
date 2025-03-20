@@ -77,6 +77,10 @@ def train_one_epoch(model, train_loader, loss_fn, optimizer, device):
         
         # Backward pass and optimize
         loss.backward()
+        
+        # Apply gradient clipping to prevent exploding gradients
+        torch.nn.utils.clip_grad_norm_(model.parameters(), config.GRADIENT_CLIP_VALUE)
+        
         optimizer.step()
         
         # Update losses
@@ -201,7 +205,8 @@ def save_checkpoint(model, optimizer, scheduler, epoch, best_val_loss, metrics, 
         'optimizer_state_dict': optimizer.state_dict(),
         'scheduler_state_dict': scheduler.state_dict() if scheduler else None,
         'best_val_loss': best_val_loss,
-        'metrics': metrics
+        'metrics': metrics,
+        'model_type': config.MODEL_TYPE  # Add model type for compatibility
     }
     
     torch.save(checkpoint, filename)
@@ -246,15 +251,15 @@ def load_checkpoint(model, optimizer=None, scheduler=None, filename=None):
 
 def train(resume_from=None):
     """
-    Main training function.
+    Train the visual odometry model.
     
     Args:
-        resume_from (str, optional): Path to checkpoint to resume from
+        resume_from (str, optional): Path to checkpoint to resume training from
         
     Returns:
-        tuple: (model, train_losses, val_losses)
+        str: Path to the best model checkpoint
     """
-    # Create directories if they don't exist
+    # Create output directories if they don't exist
     os.makedirs(os.path.join(config.RESULTS_DIR, "checkpoints"), exist_ok=True)
     os.makedirs(os.path.join(config.RESULTS_DIR, "logs"), exist_ok=True)
     
@@ -263,25 +268,40 @@ def train(resume_from=None):
     print(f"Using device: {device}")
     
     # Create data loaders
-    train_loader, val_loader, _ = create_data_loaders()
-    print(f"Train batches: {len(train_loader)}, Val batches: {len(val_loader)}")
+    train_loader, val_loader, _ = create_data_loaders(
+        dataset_path=config.DATASET_PATH,
+        scene_id=config.SCENE_ID,
+        batch_size=config.BATCH_SIZE,
+        num_workers=config.NUM_WORKERS,
+        img_height=config.IMG_HEIGHT,
+        img_width=config.IMG_WIDTH,
+        use_augmentation=config.USE_AUGMENTATION
+    )
+    print(f"Created data loaders: {len(train_loader)} training batches, {len(val_loader)} validation batches")
     
-    # Create model, optimizer, loss function, and scheduler
-    model = get_model(model_type="standard", pretrained=config.RESNET_PRETRAINED)
+    # Create model
+    model = get_model(model_type=config.MODEL_TYPE, pretrained=config.USE_PRETRAINED)
     model = model.to(device)
+    print(f"Created model: {config.MODEL_TYPE}")
     
+    # Create loss function
+    loss_fn = get_loss_function(loss_type=config.LOSS_TYPE)
+    print(f"Using loss function: {config.LOSS_TYPE}")
+    
+    # Create optimizer
     optimizer = optim.Adam(
         model.parameters(),
         lr=config.LEARNING_RATE,
         weight_decay=config.WEIGHT_DECAY
     )
     
-    loss_fn = get_loss_function(loss_type="combined")
-    
-    scheduler = optim.lr_scheduler.StepLR(
+    # Create learning rate scheduler
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
-        step_size=config.LR_SCHEDULER_STEP_SIZE,
-        gamma=config.LR_SCHEDULER_GAMMA
+        mode='min',
+        factor=config.LR_SCHEDULER_FACTOR,
+        patience=config.LR_SCHEDULER_PATIENCE,
+        verbose=True
     )
     
     # Initialize training variables
@@ -289,103 +309,102 @@ def train(resume_from=None):
     best_val_loss = float('inf')
     train_losses = []
     val_losses = []
-    train_metrics = []
-    val_metrics = []
+    train_translation_losses = []
+    val_translation_losses = []
     
-    # Resume from checkpoint if specified
+    # If resuming from checkpoint
     if resume_from:
-        if os.path.exists(resume_from):
-            print(f"Resuming from checkpoint: {resume_from}")
-            model, optimizer, scheduler, start_epoch, best_val_loss, metrics = load_checkpoint(
-                model, optimizer, scheduler, resume_from
-            )
-            
+        print(f"Resuming training from {resume_from}")
+        model, optimizer, scheduler, epoch, best_val_loss, metrics = load_checkpoint(
+            model, optimizer, scheduler, resume_from
+        )
+        start_epoch = epoch + 1
+        
+        # Extract metrics from the checkpoint
+        if metrics:
             if 'train_losses' in metrics:
                 train_losses = metrics['train_losses']
-            
             if 'val_losses' in metrics:
                 val_losses = metrics['val_losses']
-            
-            if 'train_metrics' in metrics:
-                train_metrics = metrics['train_metrics']
-            
-            if 'val_metrics' in metrics:
-                val_metrics = metrics['val_metrics']
-            
-            start_epoch += 1  # Start from the next epoch
-        else:
-            print(f"Warning: Checkpoint file {resume_from} not found. Starting from scratch.")
+            if 'train_translation_losses' in metrics:
+                train_translation_losses = metrics['train_translation_losses']
+            if 'val_translation_losses' in metrics:
+                val_translation_losses = metrics['val_translation_losses']
     
     # Training loop
-    print(f"Starting training from epoch {start_epoch + 1}/{config.NUM_EPOCHS}")
-    
-    for epoch in range(start_epoch, config.NUM_EPOCHS):
-        print(f"\nEpoch {epoch + 1}/{config.NUM_EPOCHS}")
+    print(f"Starting training from epoch {start_epoch} for {config.EPOCHS} epochs")
+    for epoch in range(start_epoch, start_epoch + config.EPOCHS):
+        print(f"\nEpoch {epoch+1}/{start_epoch + config.EPOCHS}")
         
-        # Train one epoch
-        train_metric = train_one_epoch(model, train_loader, loss_fn, optimizer, device)
-        train_losses.append(train_metric['loss'])
-        train_metrics.append(train_metric)
+        # Train
+        train_metrics = train_one_epoch(model, train_loader, loss_fn, optimizer, device)
+        train_loss = train_metrics['loss']
+        train_translation_loss = train_metrics['translation_loss']
         
         # Validate
-        val_metric = validate(model, val_loader, loss_fn, device)
-        val_losses.append(val_metric['loss'])
-        val_metrics.append(val_metric)
+        val_metrics = validate(model, val_loader, loss_fn, device)
+        val_loss = val_metrics['loss']
+        val_translation_loss = val_metrics['translation_loss']
         
         # Update learning rate
-        scheduler.step()
+        scheduler.step(val_loss)
         
-        # Print metrics
-        current_lr = scheduler.get_last_lr()[0]
-        print(f"LR: {current_lr:.6f}, "
-              f"Train Loss: {train_metric['loss']:.4f}, "
-              f"Val Loss: {val_metric['loss']:.4f}, "
-              f"Train Trans Loss: {train_metric['translation_loss']:.4f}, "
-              f"Val Trans Loss: {val_metric['translation_loss']:.4f}, "
-              f"Train Rot Loss: {train_metric['rotation_loss']:.4f}, "
-              f"Val Rot Loss: {val_metric['rotation_loss']:.4f}")
+        # Save losses
+        train_losses.append(train_loss)
+        val_losses.append(val_loss)
+        train_translation_losses.append(train_translation_loss)
+        val_translation_losses.append(val_translation_loss)
         
-        # Save checkpoint
-        is_best = val_metric['loss'] < best_val_loss
-        if is_best:
-            best_val_loss = val_metric['loss']
+        # Log metrics
+        print(f"Train Loss: {train_loss:.6f}, Translation Loss: {train_translation_loss:.6f}")
+        print(f"Val Loss: {val_loss:.6f}, Translation Loss: {val_translation_loss:.6f}")
         
-        # Save metrics for checkpoint
+        # Save metrics
         metrics = {
-            'train_losses': train_losses,
-            'val_losses': val_losses,
-            'train_metrics': train_metrics,
-            'val_metrics': val_metrics
+            'epoch': epoch,
+            'train_loss': train_loss,
+            'val_loss': val_loss,
+            'train_translation_loss': train_translation_loss,
+            'val_translation_loss': val_translation_loss,
+            'learning_rate': optimizer.param_groups[0]['lr']
         }
         
         # Save checkpoint
-        if (epoch + 1) % config.SAVE_CHECKPOINT_FREQ == 0 or is_best or epoch == config.NUM_EPOCHS - 1:
-            checkpoint_path = os.path.join(config.RESULTS_DIR, "checkpoints", f"checkpoint_epoch_{epoch+1}.pth")
-            save_checkpoint(model, optimizer, scheduler, epoch, best_val_loss, metrics, is_best, checkpoint_path)
+        is_best = val_loss < best_val_loss
+        if is_best:
+            best_val_loss = val_loss
+            print(f"New best validation loss: {best_val_loss:.6f}")
         
-        # Generate and save loss plot
-        if (epoch + 1) % config.SAVE_CHECKPOINT_FREQ == 0 or epoch == config.NUM_EPOCHS - 1:
-            plot_loss_curves(train_losses, val_losses, config.LOSS_PLOT_PATH)
-            
-            # Save loss values to file
-            with open(os.path.join(config.RESULTS_DIR, "logs", "losses.json"), 'w') as f:
-                json.dump({
-                    'train_losses': train_losses,
-                    'val_losses': val_losses,
-                    'train_metrics': train_metrics,
-                    'val_metrics': val_metrics
-                }, f, indent=4)
+        # Save all training history
+        metrics_history = {
+            'train_losses': train_losses,
+            'val_losses': val_losses,
+            'train_translation_losses': train_translation_losses,
+            'val_translation_losses': val_translation_losses
+        }
+        
+        # Combine metrics
+        all_metrics = {**metrics, **metrics_history}
+        
+        # Save checkpoint
+        checkpoint_path = os.path.join(config.RESULTS_DIR, 'checkpoints', f'checkpoint_epoch_{epoch+1}.pth')
+        best_model_path = os.path.join(config.RESULTS_DIR, 'checkpoints', 'best_model.pth')
+        save_checkpoint(model, optimizer, scheduler, epoch, best_val_loss, all_metrics, is_best, checkpoint_path)
+        
+    # Plot loss curves
+    loss_curves_path = os.path.join(config.RESULTS_DIR, 'logs', 'loss_curves.png')
+    plot_loss_curves(
+        train_losses, 
+        val_losses, 
+        train_translation_losses, 
+        val_translation_losses, 
+        loss_curves_path
+    )
     
-    print("\nTraining complete!")
-    return model, train_losses, val_losses
+    return best_model_path
 
 
 if __name__ == "__main__":
     # Run training
-    model, train_losses, val_losses = train()
-    
-    # Save final model
-    torch.save(model.state_dict(), os.path.join(config.RESULTS_DIR, "checkpoints", "final_model.pth"))
-    
-    # Plot final loss curves
-    plot_loss_curves(train_losses, val_losses, config.LOSS_PLOT_PATH) 
+    best_model_path = train()
+    print(f"Training completed. Best model saved at: {best_model_path}") 

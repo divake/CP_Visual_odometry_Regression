@@ -2,3 +2,4 @@
 dataset_rgbd_scenes_v2/
 .gitignore
 __pycache__/
+Results/

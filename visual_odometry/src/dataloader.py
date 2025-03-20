@@ -12,7 +12,7 @@ It includes:
 import os
 import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset, DataLoader, random_split, Subset
 import cv2
 import glob
 from pathlib import Path
@@ -192,23 +192,37 @@ class RGBDDataset(Dataset):
         return Image.open(img_path).convert('RGB')
 
 
-def get_data_transforms():
+def get_data_transforms(img_height, img_width, use_augmentation):
     """
     Get data transformations for training and validation.
     
+    Args:
+        img_height (int): Height to resize images to
+        img_width (int): Width to resize images to
+        use_augmentation (bool): Whether to use data augmentation
+        
     Returns:
-        dict: Dictionary with 'train' and 'val' transformations
+        dict: Dictionary with train and validation transforms
     """
     # Define transformations
-    train_transform = transforms.Compose([
-        transforms.Resize((config.IMG_HEIGHT, config.IMG_WIDTH)),
-        transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=config.NORMALIZE_MEAN, std=config.NORMALIZE_STD)
-    ])
+    if use_augmentation:
+        train_transform = transforms.Compose([
+            transforms.Resize((img_height, img_width)),
+            transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=config.NORMALIZE_MEAN, std=config.NORMALIZE_STD),
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.RandomRotation(5),
+        ])
+    else:
+        train_transform = transforms.Compose([
+            transforms.Resize((img_height, img_width)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=config.NORMALIZE_MEAN, std=config.NORMALIZE_STD)
+        ])
     
     val_transform = transforms.Compose([
-        transforms.Resize((config.IMG_HEIGHT, config.IMG_WIDTH)),
+        transforms.Resize((img_height, img_width)),
         transforms.ToTensor(),
         transforms.Normalize(mean=config.NORMALIZE_MEAN, std=config.NORMALIZE_STD)
     ])
@@ -219,66 +233,114 @@ def get_data_transforms():
     }
 
 
-def create_data_loaders():
+def create_data_loaders(
+    dataset_path=config.DATASET_PATH,
+    scene_id=config.SCENE_ID,
+    batch_size=config.BATCH_SIZE,
+    num_workers=config.NUM_WORKERS,
+    img_height=config.IMG_HEIGHT,
+    img_width=config.IMG_WIDTH,
+    use_augmentation=config.USE_AUGMENTATION
+):
     """
     Create data loaders for training, validation, and testing.
     
+    This function implements a frame-based split for scene_02:
+    - 80% of frames used for training (further split into train/val with 80/20 ratio)
+    - 100% of frames used for testing to evaluate the full trajectory
+    
+    Args:
+        dataset_path (str): Path to the dataset
+        scene_id (str): Scene ID to use
+        batch_size (int): Batch size for the data loaders
+        num_workers (int): Number of workers for data loading
+        img_height (int): Height to resize images to
+        img_width (int): Width to resize images to
+        use_augmentation (bool): Whether to use data augmentation
+        
     Returns:
         tuple: (train_loader, val_loader, test_loader)
     """
-    # Get transforms
-    transforms_dict = get_data_transforms()
+    # Get transforms with custom image dimensions
+    transforms_dict = get_data_transforms(img_height, img_width, use_augmentation)
     
-    # Create the full training/validation dataset
-    train_val_dataset = RGBDDataset(
-        dataset_path=config.DATASET_PATH,
-        scene_ids=config.TRAIN_SCENES,
-        transform=transforms_dict['train']
+    # Load the entire dataset for the specified scene
+    full_dataset = RGBDDataset(
+        dataset_path=dataset_path,
+        scene_ids=[scene_id],  # Convert to list
+        transform=None  # No transform initially
     )
     
-    # Split into train and validation
-    dataset_size = len(train_val_dataset)
-    train_size = int(config.TRAIN_VAL_SPLIT * dataset_size)
-    val_size = dataset_size - train_size
+    # Total number of frame pairs
+    total_pairs = len(full_dataset)
+    print(f"Total frame pairs in scene_{scene_id}: {total_pairs}")
+    
+    # Create indices for train/test split
+    indices = list(range(total_pairs))
+    
+    # Set random seed for reproducibility
+    random.seed(42)
+    # Shuffle indices
+    random.shuffle(indices)
+    
+    # Calculate split points
+    train_size = int(config.TRAIN_FRAME_RATIO * total_pairs)
+    
+    # Split indices
+    train_val_indices = indices[:train_size]
+    
+    # For testing, use ALL frames to reconstruct the full trajectory
+    test_indices = list(range(total_pairs)) if config.TEST_FULL_TRAJECTORY else indices[train_size:]
+    
+    # Create train/val datasets using the train indices
+    train_val_dataset = Subset(full_dataset, train_val_indices)
+    
+    # Apply transforms to the train_val dataset
+    train_val_dataset.dataset.transform = transforms_dict['train']
+    
+    # Further split train into train and validation
+    train_size = int(config.TRAIN_VAL_SPLIT * len(train_val_dataset))
+    val_size = len(train_val_dataset) - train_size
     
     train_dataset, val_dataset = random_split(
-        train_val_dataset, 
+        train_val_dataset,
         [train_size, val_size],
         generator=torch.Generator().manual_seed(42)  # For reproducibility
     )
     
     # Override the transform for validation dataset
-    val_dataset.dataset.transform = transforms_dict['val']
+    val_dataset.dataset.dataset.transform = transforms_dict['val']
     
-    # Create test dataset
-    test_dataset = RGBDDataset(
-        dataset_path=config.DATASET_PATH,
-        scene_ids=config.TEST_SCENES,
-        transform=transforms_dict['val']  # Use validation transform for testing
-    )
+    # Create test dataset with all frames
+    test_dataset = Subset(full_dataset, test_indices)
+    test_dataset.dataset.transform = transforms_dict['val']  # Use validation transform for testing
+    
+    print(f"Train set: {len(train_dataset)} pairs")
+    print(f"Validation set: {len(val_dataset)} pairs")
+    print(f"Test set: {len(test_dataset)} pairs")
     
     # Create data loaders
     train_loader = DataLoader(
         train_dataset,
-        batch_size=config.BATCH_SIZE,
+        batch_size=batch_size,
         shuffle=True,
-        num_workers=config.NUM_WORKERS,
+        num_workers=num_workers,
         pin_memory=True
     )
     
     val_loader = DataLoader(
         val_dataset,
-        batch_size=config.BATCH_SIZE,
+        batch_size=batch_size,
         shuffle=False,
-        num_workers=config.NUM_WORKERS,
+        num_workers=num_workers,
         pin_memory=True
     )
     
     test_loader = DataLoader(
         test_dataset,
-        batch_size=config.BATCH_SIZE,
+        batch_size=batch_size,
         shuffle=False,
-        num_workers=config.NUM_WORKERS,
+        num_workers=num_workers,
         pin_memory=True
     )
     
@@ -289,8 +351,8 @@ if __name__ == "__main__":
     # Test the dataset
     dataset = RGBDDataset(
         dataset_path=config.DATASET_PATH,
-        scene_ids=["01"],
-        transform=get_data_transforms()['train']
+        scene_ids=[config.SCENE_ID],
+        transform=get_data_transforms(config.IMG_HEIGHT, config.IMG_WIDTH, config.USE_AUGMENTATION)['train']
     )
     
     print(f"Dataset size: {len(dataset)}")
@@ -302,7 +364,15 @@ if __name__ == "__main__":
         print(f"Relative pose: {rel_pose}")
     
     # Test the data loaders
-    train_loader, val_loader, test_loader = create_data_loaders()
+    train_loader, val_loader, test_loader = create_data_loaders(
+        dataset_path=config.DATASET_PATH,
+        scene_id=config.SCENE_ID,
+        batch_size=config.BATCH_SIZE,
+        num_workers=config.NUM_WORKERS,
+        img_height=config.IMG_HEIGHT,
+        img_width=config.IMG_WIDTH,
+        use_augmentation=config.USE_AUGMENTATION
+    )
     
     print(f"Train loader size: {len(train_loader)}")
     print(f"Val loader size: {len(val_loader)}")

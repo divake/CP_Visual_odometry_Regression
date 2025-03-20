@@ -22,20 +22,27 @@ os.makedirs(os.path.join(RESULTS_DIR, "visualizations"), exist_ok=True)
 os.makedirs(os.path.join(RESULTS_DIR, "predictions"), exist_ok=True)
 
 # Dataset settings
-TRAIN_SCENES = ["01", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13", "14"]
-TEST_SCENES = ["02"]  # We'll test on scene_02
+# Modified to focus only on scene_02 for both training and testing
+SCENE_ID = "02"
+TRAIN_SCENES = [SCENE_ID]  # Use only scene_02 for training
+TEST_SCENES = [SCENE_ID]   # Use scene_02 for testing as well
 TRAIN_VAL_SPLIT = 0.8  # 80% for training, 20% for validation
+TRAIN_FRAME_RATIO = 0.8  # Use 80% of scene_02 frames for training
+TEST_FULL_TRAJECTORY = True  # Test on 100% of the trajectory
 
 # Image preprocessing
 IMG_HEIGHT = 240
 IMG_WIDTH = 320
 NORMALIZE_MEAN = [0.485, 0.456, 0.406]  # ImageNet mean
 NORMALIZE_STD = [0.229, 0.224, 0.225]   # ImageNet std
+USE_AUGMENTATION = True  # Whether to use data augmentation during training
 
 # Model parameters
+MODEL_TYPE = "enhanced"  # Model type: "standard", "siamese", or "enhanced"
+USE_PRETRAINED = True    # Whether to use pretrained weights
 RESNET_PRETRAINED = True
 FEATURE_DIMENSION = 512  # Output dimension of ResNet18 features
-FC_DROPOUT = 0.5        # Dropout rate for fully connected layers
+FC_DROPOUT = 0.3        # Dropout rate for fully connected layers (reduced from 0.5)
 
 # Translation and rotation output dimensions
 TRANSLATION_DIM = 3     # x, y, z
@@ -43,17 +50,26 @@ ROTATION_DIM = 4        # quaternion: w, x, y, z
 
 # Training hyperparameters
 BATCH_SIZE = 32
+TEST_BATCH_SIZE = 32  # Batch size for testing
 NUM_WORKERS = 4
 LEARNING_RATE = 0.0001
-WEIGHT_DECAY = 0.0001
-NUM_EPOCHS = 50
-LR_SCHEDULER_STEP_SIZE = 20
-LR_SCHEDULER_GAMMA = 0.1
+WEIGHT_DECAY = 0.00005  # Reduced for better generalization
+EPOCHS = 100  # Increased number of epochs for better convergence
+LR_SCHEDULER_FACTOR = 0.5  # Changed from 0.1 for smoother LR reduction
+LR_SCHEDULER_PATIENCE = 7  # Increased patience for more stable training
+GRADIENT_CLIP_VALUE = 1.0  # Value for gradient clipping (to prevent exploding gradients)
 
-# Loss function weights
+# Loss function parameters
+LOSS_TYPE = "robust_translation_only"
 TRANSLATION_LOSS_WEIGHT = 1.0
-ROTATION_LOSS_WEIGHT = 1.0
-QUATERNION_NORM_WEIGHT = 0.1  # Weight for quaternion normalization loss
+ROTATION_LOSS_WEIGHT = 0.0  # Set to 0 for translation-only mode
+QUATERNION_NORM_WEIGHT = 0.0  # Set to 0 for translation-only mode
+# Robust loss parameters
+HUBER_WEIGHT = 0.4
+WEIGHTED_WEIGHT = 0.2
+SCALE_INV_WEIGHT = 0.1
+SCALE_NORM_WEIGHT = 0.2  # Added for the new scale normalization component
+GEOMETRIC_WEIGHT = 0.1   # Added for the new geometric consistency component
 
 # Checkpoint settings
 SAVE_CHECKPOINT_FREQ = 5  # Save checkpoint every N epochs

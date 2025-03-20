@@ -111,10 +111,10 @@ def visualize_trajectory_comparison(pred_trajectory_path=None, gt_trajectory_pat
         gt_trajectory_path (str, optional): Path to ground truth trajectory file. Defaults to None.
     """
     if pred_trajectory_path is None:
-        pred_trajectory_path = os.path.join(config.RESULTS_DIR, "predictions", "predicted_trajectory.csv")
+        pred_trajectory_path = os.path.join(config.RESULTS_DIR, "predictions", f"scene_{config.SCENE_ID}_predicted_trajectory.csv")
     
     if gt_trajectory_path is None:
-        gt_trajectory_path = os.path.join(config.RESULTS_DIR, "predictions", "ground_truth_trajectory.csv")
+        gt_trajectory_path = os.path.join(config.RESULTS_DIR, "predictions", f"scene_{config.SCENE_ID}_ground_truth_trajectory.csv")
     
     if not os.path.exists(pred_trajectory_path) or not os.path.exists(gt_trajectory_path):
         print("Trajectory files not found")
@@ -150,10 +150,10 @@ def visualize_error_analysis(pred_trajectory_path=None, gt_trajectory_path=None)
         gt_trajectory_path (str, optional): Path to ground truth trajectory file. Defaults to None.
     """
     if pred_trajectory_path is None:
-        pred_trajectory_path = os.path.join(config.RESULTS_DIR, "predictions", "predicted_trajectory.csv")
+        pred_trajectory_path = os.path.join(config.RESULTS_DIR, "predictions", f"scene_{config.SCENE_ID}_predicted_trajectory.csv")
     
     if gt_trajectory_path is None:
-        gt_trajectory_path = os.path.join(config.RESULTS_DIR, "predictions", "ground_truth_trajectory.csv")
+        gt_trajectory_path = os.path.join(config.RESULTS_DIR, "predictions", f"scene_{config.SCENE_ID}_ground_truth_trajectory.csv")
     
     if not os.path.exists(pred_trajectory_path) or not os.path.exists(gt_trajectory_path):
         print("Trajectory files not found")
@@ -186,10 +186,10 @@ def visualize_trajectory_segments(pred_trajectory_path=None, gt_trajectory_path=
         segment_size (int, optional): Number of poses in each segment. Defaults to 100.
     """
     if pred_trajectory_path is None:
-        pred_trajectory_path = os.path.join(config.RESULTS_DIR, "predictions", "predicted_trajectory.csv")
+        pred_trajectory_path = os.path.join(config.RESULTS_DIR, "predictions", f"scene_{config.SCENE_ID}_predicted_trajectory.csv")
     
     if gt_trajectory_path is None:
-        gt_trajectory_path = os.path.join(config.RESULTS_DIR, "predictions", "ground_truth_trajectory.csv")
+        gt_trajectory_path = os.path.join(config.RESULTS_DIR, "predictions", f"scene_{config.SCENE_ID}_ground_truth_trajectory.csv")
     
     if not os.path.exists(pred_trajectory_path) or not os.path.exists(gt_trajectory_path):
         print("Trajectory files not found")
@@ -208,7 +208,7 @@ def visualize_trajectory_segments(pred_trajectory_path=None, gt_trajectory_path=
         gt_trajectory = gt_trajectory[:min_len]
     
     # Create segments directory
-    segments_dir = os.path.join(config.RESULTS_DIR, "visualizations", "segments")
+    segments_dir = os.path.join(config.RESULTS_DIR, "visualizations", f"scene_{config.SCENE_ID}_segments")
     os.makedirs(segments_dir, exist_ok=True)
     
     # Get number of segments
@@ -239,7 +239,7 @@ def visualize_trajectory_segments(pred_trajectory_path=None, gt_trajectory_path=
 
 def visualize_all():
     """Visualize all available data."""
-    print("Visualizing all data...")
+    print(f"Visualizing all data for scene_{config.SCENE_ID}...")
     
     # Check if directories exist
     if not os.path.exists(config.RESULTS_DIR):
